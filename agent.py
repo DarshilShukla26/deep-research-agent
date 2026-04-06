@@ -129,11 +129,13 @@ class DeepResearchAgent:
         self,
         token_cap: int = 50_000,
         model: str = "claude-opus-4-6",
+        fast_model: str = "claude-haiku-4-5",
         chroma_path: str = "./chroma_db",
         eval_path: str = "evaluation.md",
         max_iterations: int = 8,
     ):
         self.model = model
+        self.fast_model = fast_model
         self.max_iterations = max_iterations
         self._client = anthropic.Anthropic()
 
@@ -185,6 +187,9 @@ class DeepResearchAgent:
 
         try:
             result = self._research_loop(user_query, budget, run_log)
+            result = self._polish_answer(result, user_query, budget)
+            score = self._self_score(user_query, result, budget)
+            run_log["self_score"] = score
         except Exception as exc:
             result = f"[Agent error: {exc}]"
         finally:
@@ -237,9 +242,8 @@ class DeepResearchAgent:
 
             # ── Step 5: Call Claude ────────────────────────────────────
             response = self._client.messages.create(
-                model=self.model,
+                model=self.fast_model,
                 max_tokens=max_out,
-                thinking={"type": "adaptive"},
                 system=system,
                 messages=messages,
                 tools=TOOLS,
@@ -294,6 +298,65 @@ class DeepResearchAgent:
                 run_log["memory_strategies"].append("summary_cascade")
 
         return answer_to_store
+
+    def _polish_answer(self, raw_answer: str, query: str, budget: TokenBudget) -> str:
+        """Use the full model to rewrite the raw answer with better structure."""
+        if not raw_answer or raw_answer.startswith("[Agent error"):
+            return raw_answer
+        if budget.remaining < 2_000:
+            return raw_answer  # not enough budget to polish
+
+        prompt = (
+            f"Original question: {query}\n\n"
+            f"Draft answer:\n{raw_answer}\n\n"
+            "Rewrite this answer with:\n"
+            "• ## section headers for each major topic\n"
+            "• **bold** for key terms\n"
+            "• Bullet points or numbered lists where appropriate\n"
+            "• A ## Summary section at the end with 3-5 key takeaways\n"
+            "Keep all the information — only improve the formatting and clarity."
+        )
+        resp = self._client.messages.create(
+            model=self.model,
+            max_tokens=min(2_048, budget.remaining // 2),
+            messages=[{"role": "user", "content": prompt}],
+        )
+        self._guard.record(budget, resp.usage.input_tokens, resp.usage.output_tokens)
+        for block in resp.content:
+            if hasattr(block, "text"):
+                return block.text
+        return raw_answer
+
+    def _self_score(self, query: str, answer: str, budget: TokenBudget) -> dict:
+        """Rate the answer quality using the fast model. Returns score dict."""
+        if not answer or answer.startswith("[Agent error") or budget.remaining < 1_000:
+            return {}
+
+        prompt = (
+            f"Question: {query}\n\nAnswer:\n{answer}\n\n"
+            "Rate this answer on each dimension from 1 (poor) to 5 (excellent):\n"
+            "1. Completeness — does it fully address all parts of the question?\n"
+            "2. Clarity — is it well-structured and easy to read?\n"
+            "3. Accuracy — does it appear factually sound and well-reasoned?\n\n"
+            "Reply with ONLY a JSON object, no explanation:\n"
+            '{"completeness": <1-5>, "clarity": <1-5>, "accuracy": <1-5>, "overall": <1-5>, "note": "<one sentence>"}'
+        )
+        try:
+            resp = self._client.messages.create(
+                model=self.fast_model,
+                max_tokens=120,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            self._guard.record(budget, resp.usage.input_tokens, resp.usage.output_tokens)
+            import json, re
+            for block in resp.content:
+                if hasattr(block, "text"):
+                    match = re.search(r'\{.*\}', block.text, re.DOTALL)
+                    if match:
+                        return json.loads(match.group())
+        except Exception:
+            pass
+        return {}
 
     # ── Helpers ───────────────────────────────────────────────────────────────
     def _build_system(self, context: str, budget: TokenBudget) -> str:

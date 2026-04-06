@@ -55,7 +55,6 @@ class SummaryCascade:
         resp = self._client.messages.create(
             model=self._model,
             max_tokens=400,
-            thinking={"type": "adaptive"},
             messages=[{"role": "user", "content": prompt}],
         )
         if self._guard:

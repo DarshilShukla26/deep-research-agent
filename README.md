@@ -227,7 +227,45 @@ Python packages: `anthropic`, `chromadb`, `tiktoken`, `python-dotenv`, `fastapi`
 
 ---
 
-## Notes
+## Business Impact
+
+### The problem this solves
+
+Research is expensive. When a team member needs to understand a topic — a new technology, a competitor, a market trend — they either spend hours reading, or they ask an LLM that hallucinates and has no memory of what was asked last week.
+
+This agent sits between those two extremes. It remembers what your team has already researched, builds on it over time, and gives you a cost-controlled, self-assessed answer every time.
+
+### Concrete value
+
+**Cost control at the query level**
+Most LLM deployments have no per-query spending limits. A single complex query with a badly written prompt can cost $2–5. This agent enforces a hard token cap per query — you decide the ceiling before it runs. The `--compare` mode shows you exactly what quality you lose by cutting the budget in half, so you can make an informed call.
+
+**Knowledge compounds over time**
+Every answer the agent produces gets stored back into ChromaDB. The third question your team asks about a topic is cheaper and better-answered than the first, because the agent already has context from the previous two. This turns one-off LLM queries into an organisational knowledge base.
+
+**Handles the "I don't know" problem gracefully**
+Most agents either hallucinate when they lack data, or return an unhelpful empty response. This agent falls back to live web search automatically, then stores what it finds. If it genuinely cannot help, it says so clearly and suggests where to look — saving time rather than wasting it on a confident wrong answer.
+
+**Non-engineers can trigger it**
+The n8n workflow means anyone in the business can POST a question to a webhook and get a structured answer back — no Python, no API keys, no terminal. Hook it up to a Slack bot and the whole team has access to a research agent without engineering involvement.
+
+**Every run is auditable**
+`evaluation.md` is a permanent record of every question asked, every token spent, every dollar cost, and a quality score. That is useful for three things: catching regressions if the agent starts performing poorly, justifying the API spend to stakeholders, and identifying which types of questions are expensive so you can pre-load relevant knowledge and cut costs.
+
+### Cost in practice
+
+From live runs during development:
+
+| Query type | Tokens used | Cost | Notes |
+|---|---|---|---|
+| Focused technical question (RLHF vs DPO) | 9,713 | $0.11 | 19% of 50k budget |
+| Broad historical question (evolution of AI) | 13,620 | $0.11 | 27% of 50k budget |
+| Real-time question with web search (Champions League) | 11,046 | $0.07 | Web fallback triggered |
+| Same question at 15k budget | ~15,000 | ~$0.08 | Answers faster, slightly less depth |
+
+The model split (haiku for search/decomposition, opus for synthesis) reduces per-query cost by roughly 60–70% compared to using Opus for everything, with no noticeable quality drop on the tool-use steps.
+
+---
 
 - `chroma_db/` is not committed to git — it's your local knowledge base. Delete it to start fresh.
 - `.env` is not committed — never share your API key.

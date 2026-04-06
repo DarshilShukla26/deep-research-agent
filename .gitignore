@@ -1,0 +1,16 @@
+# Secrets
+.env
+
+# ChromaDB (local vector store — too large for git)
+chroma_db/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# macOS
+.DS_Store
+
+# n8n local data
+.n8n/

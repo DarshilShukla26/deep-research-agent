@@ -1,0 +1,64 @@
+# docker-compose.yml — runs n8n alongside the Deep Research Agent API
+#
+# Usage:
+#   1. Set ANTHROPIC_API_KEY in a .env file (same directory as this file)
+#   2. docker compose up
+#   3. Open n8n at http://localhost:5678
+#   4. Import n8n_workflow.json  (Settings → Import workflow)
+#   5. Activate the workflow and POST to http://localhost:5678/webhook/research
+
+version: "3.9"
+
+services:
+
+  # ── n8n workflow engine ─────────────────────────────────────────────────────
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: deep-research-n8n
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    environment:
+      - N8N_HOST=0.0.0.0
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - WEBHOOK_URL=http://localhost:5678/
+      - GENERIC_TIMEZONE=UTC
+      # Allow n8n to reach the agent API on the host machine
+      - NODE_FUNCTION_ALLOW_EXTERNAL=*
+    volumes:
+      - n8n_data:/home/node/.n8n
+      # Mount the workflow file so it can be imported easily
+      - ./n8n_workflow.json:/home/node/n8n_workflow.json:ro
+    extra_hosts:
+      # Allows n8n (inside Docker) to reach http://localhost:8000 on the host
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      agent-api:
+        condition: service_healthy
+
+  # ── Deep Research Agent FastAPI server ──────────────────────────────────────
+  agent-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: deep-research-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+    volumes:
+      # Persist ChromaDB and evaluation log across restarts
+      - ./chroma_db:/app/chroma_db
+      - ./evaluation.md:/app/evaluation.md
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+volumes:
+  n8n_data:
+    driver: local

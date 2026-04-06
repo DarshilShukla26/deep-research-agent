@@ -1,0 +1,151 @@
+{
+  "name": "Deep Research Agent — Query Router",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "research",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "dra-node-01",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300],
+      "webhookId": "deep-research-agent-hook"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── Validate & Classify Query Complexity ─────────────────────────────────\n//\n// Input  (from Webhook body): { query, cap?, model?, max_iterations? }\n// Output: { query, cap, model, max_iterations, tier, classified_at }\n//\n// Tiers and their default token caps:\n//   simple   → 15 000  (≤10 words, no comparison/multi-part signals)\n//   complex  → 30 000  (moderate length or mixed intent)\n//   deep     → 50 000  (multi-question, comparison, or explicit research ask)\n//   custom   → caller-supplied cap (when `cap` is explicitly provided)\n\nconst body = $input.first().json.body || $input.first().json;\n\nif (!body || typeof body.query !== 'string' || !body.query.trim()) {\n  throw new Error('Request body must contain a non-empty `query` string.');\n}\n\nconst query          = body.query.trim();\nconst requestedCap   = typeof body.cap === 'number' ? body.cap : null;\nconst model          = body.model          || 'claude-opus-4-6';\nconst maxIterations  = body.max_iterations || 8;\n\n// Complexity signals\nconst wordCount          = query.split(/\\s+/).length;\nconst questionMarks      = (query.match(/\\?/g) || []).length;\nconst hasComparison      = /\\b(compare|vs\\.?|versus|difference|contrast|pros.*cons|advantages.*disadvantages)\\b/i.test(query);\nconst hasResearchKeyword = /\\b(research|analyze|analyse|explain|deep.?dive|comprehensive|overview|survey|summarize|summarise)\\b/i.test(query);\nconst isMultiPart        = questionMarks > 1 || /;\\s*(?:and|also|additionally)/i.test(query);\n\nlet tier, cap;\nif (requestedCap !== null) {\n  tier = 'custom';\n  cap  = Math.max(1000, Math.min(200000, requestedCap));\n} else if (wordCount <= 10 && !hasComparison && !isMultiPart && !hasResearchKeyword) {\n  tier = 'simple';\n  cap  = 15000;\n} else if (isMultiPart || hasComparison || hasResearchKeyword) {\n  tier = 'deep';\n  cap  = 50000;\n} else {\n  tier = 'complex';\n  cap  = 30000;\n}\n\nreturn [{\n  json: {\n    query,\n    cap,\n    model,\n    max_iterations: maxIterations,\n    tier,\n    classified_at: new Date().toISOString()\n  }\n}];\n"
+      },
+      "id": "dra-node-02",
+      "name": "Validate & Classify",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:8000/query",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "keypair",
+        "bodyParameters": {
+          "parameters": [
+            { "name": "query",          "value": "={{ $json.query }}" },
+            { "name": "cap",            "value": "={{ $json.cap }}" },
+            { "name": "model",          "value": "={{ $json.model }}" },
+            { "name": "max_iterations", "value": "={{ $json.max_iterations }}" }
+          ]
+        },
+        "options": {
+          "timeout": 120000,
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "dra-node-03",
+      "name": "Call Agent API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [680, 300],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── Format Success Response ──────────────────────────────────────────────\nconst agent  = $input.first().json;\nconst params = $('Validate & Classify').first().json;\n\nconst strategies = (agent.memory_strategies || []).join(', ') || 'none';\nconst subQCount  = (agent.sub_questions || []).length;\n\nconst metaLine = [\n  `model=${params.model}`,\n  `tier=${params.tier}`,\n  `cap=${(params.cap || 0).toLocaleString()}`,\n  `used=${(agent.tokens_total || 0).toLocaleString()} (${agent.budget_utilisation_pct || 0}%)`,\n  `cost=$${(agent.cost_usd || 0).toFixed(6)}`,\n  `memory=[${strategies}]`,\n  `iter=${agent.iterations || 0}`,\n  subQCount > 0 ? `sub_questions=${subQCount}` : null\n].filter(Boolean).join('  |  ');\n\nreturn [{\n  json: {\n    success: true,\n    query:   params.query,\n    answer:  agent.answer,\n    meta:    metaLine,\n    detail: {\n      tier:               params.tier,\n      model:              params.model,\n      cap:                params.cap,\n      tokens_input:       agent.tokens_input,\n      tokens_output:      agent.tokens_output,\n      tokens_total:       agent.tokens_total,\n      budget_utilisation: agent.budget_utilisation_pct,\n      cost_usd:           agent.cost_usd,\n      memory_strategies:  agent.memory_strategies,\n      sub_questions:      agent.sub_questions,\n      iterations:         agent.iterations,\n      classified_at:      params.classified_at\n    }\n  }\n}];\n"
+      },
+      "id": "dra-node-04",
+      "name": "Format Success",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 220]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── Format Error Response ────────────────────────────────────────────────\nconst err    = $input.first().json;\nconst params = $('Validate & Classify').first().json;\n\nreturn [{\n  json: {\n    success: false,\n    query:   params.query,\n    error:   err.message || err.error || 'Agent API call failed',\n    detail:  err\n  }\n}];\n"
+      },
+      "id": "dra-node-05",
+      "name": "Format Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 420]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "dra-node-06",
+      "name": "Respond — Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1120, 220]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 500
+        }
+      },
+      "id": "dra-node-07",
+      "name": "Respond — Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1120, 420]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [{ "node": "Validate & Classify", "type": "main", "index": 0 }]
+      ]
+    },
+    "Validate & Classify": {
+      "main": [
+        [{ "node": "Call Agent API", "type": "main", "index": 0 }]
+      ]
+    },
+    "Call Agent API": {
+      "main": [
+        [{ "node": "Format Success", "type": "main", "index": 0 }],
+        [{ "node": "Format Error",   "type": "main", "index": 0 }]
+      ]
+    },
+    "Format Success": {
+      "main": [
+        [{ "node": "Respond — Success", "type": "main", "index": 0 }]
+      ]
+    },
+    "Format Error": {
+      "main": [
+        [{ "node": "Respond — Error", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "id": "deep-research-agent-v1",
+  "meta": {
+    "templateId": "deep-research-agent",
+    "instanceId": "dra-001"
+  },
+  "tags": ["research", "ai", "memory", "claude"]
+}

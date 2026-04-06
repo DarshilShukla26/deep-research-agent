@@ -1,6 +1,6 @@
 # Deep Research Agent
 
-A research agent that actually remembers what it has learned. You ask it a complex question, it breaks it down into sub-questions, searches its memory, looks things up on the web if needed, and gives you a well-structured answer — all while staying within a token budget you define.
+A research agent that actually remembers what it has learned. You ask it a complex question, it breaks it down into sub-questions, searches its memory, looks things up on the web if needed, and gives you a well-structured answer, all while staying within a token budget you define.
 
 Built with Python, ChromaDB, and the Anthropic SDK. Comes with a REST API and an n8n workflow for routing and automation.
 
@@ -173,7 +173,7 @@ curl -X POST http://localhost:5678/webhook/research \
 
 The agent uses three memory layers that work together:
 
-**Vector RAG** stores everything the agent learns in ChromaDB. It uses semantic search to find relevant chunks — so if you ask about "reinforcement learning from feedback" it will surface results about RLHF even if the exact phrase isn't in the query.
+**Vector RAG** stores everything the agent learns in ChromaDB. It uses semantic search to find relevant chunks, so if you ask about "reinforcement learning from feedback" it will surface results about RLHF even if the exact phrase isn't in the query.
 
 **Episodic Buffer** keeps the last 10 turns of the current session in RAM. This means the agent remembers what you asked earlier in the same session without re-reading everything from the vector store.
 
@@ -231,7 +231,7 @@ Python packages: `anthropic`, `chromadb`, `tiktoken`, `python-dotenv`, `fastapi`
 
 ### The problem this solves
 
-Research is expensive. When a team member needs to understand a topic — a new technology, a competitor, a market trend — they either spend hours reading, or they ask an LLM that hallucinates and has no memory of what was asked last week.
+Research is expensive. When a team member needs to understand a topic, a new technology, a competitor, a market trend, they either spend hours reading, or they ask an LLM that hallucinates and has no memory of what was asked last week.
 
 This agent sits between those two extremes. It remembers what your team has already researched, builds on it over time, and gives you a cost-controlled, self-assessed answer every time.
 
@@ -247,7 +247,7 @@ Every answer the agent produces gets stored back into ChromaDB. The third questi
 Most agents either hallucinate when they lack data, or return an unhelpful empty response. This agent falls back to live web search automatically, then stores what it finds. If it genuinely cannot help, it says so clearly and suggests where to look — saving time rather than wasting it on a confident wrong answer.
 
 **Non-engineers can trigger it**
-The n8n workflow means anyone in the business can POST a question to a webhook and get a structured answer back — no Python, no API keys, no terminal. Hook it up to a Slack bot and the whole team has access to a research agent without engineering involvement.
+The n8n workflow means anyone in the business can POST a question to a webhook and get a structured answer back, no Python, no API keys, no terminal. Hook it up to a Slack bot and the whole team has access to a research agent without engineering involvement.
 
 **Every run is auditable**
 `evaluation.md` is a permanent record of every question asked, every token spent, every dollar cost, and a quality score. That is useful for three things: catching regressions if the agent starts performing poorly, justifying the API spend to stakeholders, and identifying which types of questions are expensive so you can pre-load relevant knowledge and cut costs.

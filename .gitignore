@@ -14,3 +14,4 @@ __pycache__/
 
 # n8n local data
 .n8n/
+generate_docs.js

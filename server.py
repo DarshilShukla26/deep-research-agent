@@ -63,6 +63,7 @@ class QueryResponse(BaseModel):
     sub_questions: list[str]
     iterations: int
     budget_utilisation_pct: float
+    self_score: dict = {}
 
 
 class IngestRequest(BaseModel):

@@ -23,6 +23,21 @@ from __future__ import annotations
 from typing import Optional
 import anthropic
 
+# Phrases that indicate the agent couldn't find useful information —
+# no point running an expensive polish call in these cases.
+_KNOWLEDGE_GAP_PHRASES = [
+    "knowledge base doesn't contain",
+    "knowledge base does not contain",
+    "don't have access to real-time",
+    "do not have access to real-time",
+    "cannot provide real-time",
+    "not contain any information",
+    "no information about",
+    "no relevant information",
+    "couldn't find any information",
+    "could not find any information",
+]
+
 from budget_guard import BudgetGuard, TokenBudget
 from context_assembler import ContextAssembler
 from evaluator import Evaluator
@@ -77,6 +92,26 @@ TOOLS: list[dict] = [
                 "source":  {"type": "string", "description": "Optional source label."},
             },
             "required": ["content"],
+        },
+    },
+    {
+        "name": "search_web",
+        "description": (
+            "Search the live web for up-to-date information not available in the "
+            "knowledge base. Use this for current events, recent data, sports, news, "
+            "prices, or anything time-sensitive."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Web search query."},
+                "max_results": {
+                    "type": "integer",
+                    "description": "Number of results to return (default 5).",
+                    "default": 5,
+                },
+            },
+            "required": ["query"],
         },
     },
     {
@@ -173,6 +208,7 @@ class DeepResearchAgent:
             "budget_utilisation_pct": round(
                 budget.used_total / budget.total_cap * 100, 1
             ) if budget.total_cap else 0.0,
+            "self_score": run_log.get("self_score", {}),
         }
 
     def _run_query(self, user_query: str) -> tuple:
@@ -305,6 +341,10 @@ class DeepResearchAgent:
             return raw_answer
         if budget.remaining < 2_000:
             return raw_answer  # not enough budget to polish
+        # Skip polish when agent flagged a knowledge gap — saves ~$0.04 per call
+        lower = raw_answer.lower()
+        if any(phrase in lower for phrase in _KNOWLEDGE_GAP_PHRASES):
+            return raw_answer
 
         prompt = (
             f"Original question: {query}\n\n"
@@ -368,8 +408,11 @@ class DeepResearchAgent:
             "Available tools:\n"
             "• decompose_question — split a complex question into sub-questions\n"
             "• search_knowledge   — semantic search in the vector knowledge base\n"
+            "• search_web         — live web search for current/real-time information\n"
             "• add_to_knowledge   — persist a new finding for future retrieval\n"
             "• synthesize_answer  — emit the final answer (ends the loop)\n\n"
+            "IMPORTANT: If search_knowledge returns no relevant results, "
+            "use search_web before giving up.\n\n"
             f"{budget_line}\n\n"
             "ANSWER FORMATTING RULES (strictly follow these):\n"
             "• Use clear Markdown: ## for main sections, ### for sub-sections\n"
@@ -415,6 +458,24 @@ class DeepResearchAgent:
                 "Sub-questions registered: " + "; ".join(sub_qs),
                 False,
             )
+
+        if name == "search_web":
+            try:
+                from duckduckgo_search import DDGS
+                results = []
+                with DDGS() as ddgs:
+                    for r in ddgs.text(inp["query"], max_results=inp.get("max_results", 5)):
+                        results.append(f"**{r.get('title','')}**\n{r.get('body','')}\nSource: {r.get('href','')}")
+                if results:
+                    snippet = "\n\n---\n\n".join(results)
+                    # Auto-store top result in knowledge base for future queries
+                    self._rag.add(results[0][:800], {"source": "web_search"})
+                    return snippet, False
+                return "No web results found.", False
+            except ImportError:
+                return "Web search unavailable — run: pip install duckduckgo_search", False
+            except Exception as e:
+                return f"Web search error: {e}", False
 
         if name == "search_knowledge":
             results = self._rag.search(

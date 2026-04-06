@@ -63,7 +63,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// ── Format Success Response ──────────────────────────────────────────────\nconst agent  = $input.first().json;\nconst params = $('Validate & Classify').first().json;\n\nconst strategies = (agent.memory_strategies || []).join(', ') || 'none';\nconst subQCount  = (agent.sub_questions || []).length;\n\nconst metaLine = [\n  `model=${params.model}`,\n  `tier=${params.tier}`,\n  `cap=${(params.cap || 0).toLocaleString()}`,\n  `used=${(agent.tokens_total || 0).toLocaleString()} (${agent.budget_utilisation_pct || 0}%)`,\n  `cost=$${(agent.cost_usd || 0).toFixed(6)}`,\n  `memory=[${strategies}]`,\n  `iter=${agent.iterations || 0}`,\n  subQCount > 0 ? `sub_questions=${subQCount}` : null\n].filter(Boolean).join('  |  ');\n\nreturn [{\n  json: {\n    success: true,\n    query:   params.query,\n    answer:  agent.answer,\n    meta:    metaLine,\n    detail: {\n      tier:               params.tier,\n      model:              params.model,\n      cap:                params.cap,\n      tokens_input:       agent.tokens_input,\n      tokens_output:      agent.tokens_output,\n      tokens_total:       agent.tokens_total,\n      budget_utilisation: agent.budget_utilisation_pct,\n      cost_usd:           agent.cost_usd,\n      memory_strategies:  agent.memory_strategies,\n      sub_questions:      agent.sub_questions,\n      iterations:         agent.iterations,\n      classified_at:      params.classified_at\n    }\n  }\n}];\n"
+        "jsCode": "// ── Format Success Response ──────────────────────────────────────────────\nconst agent  = $input.first().json;\nconst params = $('Validate & Classify').first().json;\n\nconst strategies = (agent.memory_strategies || []).join(', ') || 'none';\nconst subQCount  = (agent.sub_questions || []).length;\nconst score      = agent.self_score || {};\nconst scoreStr   = score.overall ? `score=${score.overall}/5` : null;\n\nconst metaLine = [\n  `model=${params.model}`,\n  `tier=${params.tier}`,\n  `cap=${(params.cap || 0).toLocaleString()}`,\n  `used=${(agent.tokens_total || 0).toLocaleString()} (${agent.budget_utilisation_pct || 0}%)`,\n  `cost=$${(agent.cost_usd || 0).toFixed(6)}`,\n  `memory=[${strategies}]`,\n  `iter=${agent.iterations || 0}`,\n  subQCount > 0 ? `sub_questions=${subQCount}` : null,\n  scoreStr\n].filter(Boolean).join('  |  ');\n\nreturn [{\n  json: {\n    success: true,\n    query:   params.query,\n    answer:  agent.answer,\n    meta:    metaLine,\n    detail: {\n      tier:               params.tier,\n      model:              params.model,\n      cap:                params.cap,\n      tokens_input:       agent.tokens_input,\n      tokens_output:      agent.tokens_output,\n      tokens_total:       agent.tokens_total,\n      budget_utilisation: agent.budget_utilisation_pct,\n      cost_usd:           agent.cost_usd,\n      memory_strategies:  agent.memory_strategies,\n      sub_questions:      agent.sub_questions,\n      iterations:         agent.iterations,\n      self_score:         agent.self_score || {},\n      classified_at:      params.classified_at\n    }\n  }\n}];\n"
       },
       "id": "dra-node-04",
       "name": "Format Success",
@@ -108,6 +108,30 @@
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1,
       "position": [1120, 420]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $vars.SLACK_WEBHOOK_URL || 'https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: '*Query:* ' + $('Format Success').first().json.query + '\\n\\n' + $('Format Success').first().json.answer.substring(0, 2900) + '\\n\\n_' + $('Format Success').first().json.meta + '_' }) }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "dra-node-08",
+      "name": "Post to Slack",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1120, 80],
+      "onError": "continueRegularOutput"
     }
   ],
   "connections": {
@@ -129,7 +153,10 @@
     },
     "Format Success": {
       "main": [
-        [{ "node": "Respond — Success", "type": "main", "index": 0 }]
+        [
+          { "node": "Respond — Success", "type": "main", "index": 0 },
+          { "node": "Post to Slack", "type": "main", "index": 0 }
+        ]
       ]
     },
     "Format Error": {

@@ -55,6 +55,14 @@ def parse_args() -> argparse.Namespace:
         "--max-iter", type=int, default=8,
         help="Maximum agent iterations (default: 8)",
     )
+    p.add_argument(
+        "--compare", action="store_true",
+        help="Run the query at multiple budget tiers and print a comparison table",
+    )
+    p.add_argument(
+        "--caps", default="15000,30000,50000",
+        help="Comma-separated token caps for --compare mode (default: 15000,30000,50000)",
+    )
     return p.parse_args()
 
 
@@ -98,17 +106,69 @@ def main() -> None:
             agent.ingest(chunk, metadata={"file": args.ingest, "chunk": i})
         print(f"  Ingested {len(chunks)} chunks.\n", flush=True)
 
-    # ── Run the query ──────────────────────────────────────────────────
     print(f"Query: {args.query}\n", flush=True)
     print("=" * 60, flush=True)
 
-    answer = agent.query(args.query)
+    # ── Compare mode ───────────────────────────────────────────────────
+    if args.compare:
+        caps = [int(c.strip()) for c in args.caps.split(",")]
+        rows = []
+        for cap in caps:
+            print(f"\nRunning with cap={cap:,} tokens …", flush=True)
+            cmp_agent = DeepResearchAgent(
+                token_cap=cap,
+                model=args.model,
+                chroma_path=args.chroma,
+                eval_path=args.eval,
+                max_iterations=args.max_iter,
+            )
+            result = cmp_agent.query_full(args.query)
+            rows.append({"cap": cap, **result})
+            print(f"  Done — used {result['tokens_total']:,} tokens (${result['cost_usd']:.4f})", flush=True)
 
-    print("\n" + "=" * 60)
-    print("ANSWER\n")
-    print(answer)
-    print()
-    print(f"(Run logged to {args.eval})")
+        # Print comparison table
+        print("\n" + "=" * 60)
+        print("BUDGET COMPARISON\n")
+        header = f"{'Cap':>8} | {'Used':>8} | {'Util%':>6} | {'Cost':>10} | {'Iter':>5} | {'Memory strategies'}"
+        print(header)
+        print("-" * len(header))
+        for r in rows:
+            strat = ", ".join(r["memory_strategies"]) or "none"
+            print(
+                f"{r['cap']:>8,} | {r['tokens_total']:>8,} | "
+                f"{r['budget_utilisation_pct']:>5.1f}% | "
+                f"${r['cost_usd']:>9.4f} | {r['iterations']:>5} | {strat}"
+            )
+        print()
+
+        # Log comparison to evaluation.md
+        with open(args.eval, "a") as f:
+            f.write(f"\n## Budget Comparison — {__import__('datetime').datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+            f.write(f"**Query:** {args.query}\n\n")
+            f.write("| Cap | Tokens used | Utilisation | Cost ($) | Iterations | Memory strategies |\n")
+            f.write("|---|---|---|---|---|---|\n")
+            for r in rows:
+                strat = ", ".join(r["memory_strategies"]) or "none"
+                f.write(
+                    f"| {r['cap']:,} | {r['tokens_total']:,} | "
+                    f"{r['budget_utilisation_pct']}% | "
+                    f"{r['cost_usd']:.6f} | {r['iterations']} | {strat} |\n"
+                )
+            f.write("\n---\n\n")
+
+        # Print best answer (highest cap)
+        print("ANSWER (from highest budget run)\n")
+        print(rows[-1]["answer"])
+        print(f"\n(Comparison logged to {args.eval})")
+
+    else:
+        # ── Normal single query ────────────────────────────────────────
+        answer = agent.query(args.query)
+        print("\n" + "=" * 60)
+        print("ANSWER\n")
+        print(answer)
+        print()
+        print(f"(Run logged to {args.eval})")
 
 
 if __name__ == "__main__":

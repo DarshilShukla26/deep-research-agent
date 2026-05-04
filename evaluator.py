@@ -67,6 +67,20 @@ class Evaluator:
             for q in sub_qs:
                 lines.append(f"- {q}")
 
+        score = run_log.get("self_score", {})
+        if score:
+            lines.append("")
+            lines.append("### Self-Score")
+            lines.append(f"| Dimension | Score |")
+            lines.append(f"|---|---|")
+            lines.append(f"| Completeness | {'⭐' * score.get('completeness', 0)} ({score.get('completeness', '—')}/5) |")
+            lines.append(f"| Clarity | {'⭐' * score.get('clarity', 0)} ({score.get('clarity', '—')}/5) |")
+            lines.append(f"| Accuracy | {'⭐' * score.get('accuracy', 0)} ({score.get('accuracy', '—')}/5) |")
+            lines.append(f"| **Overall** | {'⭐' * score.get('overall', 0)} **({score.get('overall', '—')}/5)** |")
+            if score.get("note"):
+                lines.append(f"")
+                lines.append(f"> {score['note']}")
+
         lines.append("")
         lines.append(f"**Iterations:** {run_log.get('iterations', 0)}")
         lines.append("")
